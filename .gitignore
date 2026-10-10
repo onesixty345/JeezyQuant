@@ -9,3 +9,7 @@ web/.env*.local
 # misc
 .DS_Store
 *.log
+
+# python
+__pycache__/
+*.pyc

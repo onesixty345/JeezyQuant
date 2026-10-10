@@ -15,15 +15,22 @@ date-keyed children.
    `status="backfill_queued"` via the Admin SDK, then calls the **secured Modal
    backfill endpoint** (`POST /backfill`, header `x-backfill-secret`).
 3. The backfill function makes the one-time historical pull:
-   - ~3 calls: 2 yrs daily bars, quarterly financials (revenue), company profile.
-   - ~2 calls: top-2 upstream supplier identification + their 2-yr daily bars.
-   - **Budget: ≤ 6 calls per new ticker, once ever.**
+   - ~3 calls: 2 yrs daily bars, quarterly financials (revenue, max 5 quarters
+     on the free tier), company profile.
+   - ~4 calls: top-2 upstream suppliers — their 2-yr daily bars AND quarterly
+     revenue (needed for the supplier-YoY leg of the divergence signal).
+   - **Budget: ≤ 7 calls per new ticker, once ever** (cron requires ≥ 8 usable).
 4. Writes `priceHistory/{YYYY-MM-DD}`, `revenueQuarterly/{YYYY-QN}`, and
-   `suppliers/{SUP}/priceHistory/{YYYY-MM-DD}`; sets `meta/status="active"`,
-   `meta/dataAsOf=<latest date>`.
+   `suppliers/{SUP}/priceHistory/{YYYY-MM-DD}` + `suppliers/{SUP}/revenueQuarterly/{YYYY-QN}`;
+   sets `meta/status="active"`, `meta/dataAsOf=<latest date>`.
 5. Any failure → `status="backfilling"`, error logged to `/quant/system_logs`;
    the UI shows "backfill pending" and the user can retry. Backfill writes are
    date-keyed, so a retried backfill overwrites rather than duplicates.
+6. Symbol entitlement: FMP's free tier does not cover every symbol (found Oct 9,
+   2026: MU returns 402 "not available under your current subscription" while
+   AAPL/NVDA/TSLA/MSFT/AMD all work). A per-symbol 402 is **not** treated as
+   quota exhaustion — the ticker is marked `status="unsupported"`, logged, and
+   skipped forever without burning budget or failing runs.
 
 Supplier identification: provider's supply-chain / peers endpoint where available;
 fallback is a manual `suppliersOverride` field Raim can set per ticker.
@@ -39,9 +46,11 @@ tracked with price+revenue only and flagged with an empty `suppliers` node.
    - Cost: **1 call** — fetch last 5 calendar days of daily bars (covers weekends/holidays).
    - Write only dates `> meta/dataAsOf` to `priceHistory/{YYYY-MM-DD}`.
      Existing dates are skipped, never re-fetched.
-   - Revenue: quarterly — only re-fetch if `reportedDate` advanced (≤ 1 call, and
-     only in earnings weeks; otherwise skipped).
-   - Suppliers: same 1-call delta each (their bars are the covariate series).
+   - Revenue: at most monthly — if `meta/revenueAsOf` is older than 30 days,
+     refresh quarterly revenue (1 call) plus each supplier's quarterly revenue
+     (1 call each, piggybacked). Otherwise skipped. Free tier serves max
+     5 quarters (~15 months), which is exactly one YoY comparison.
+   - Suppliers: same 1-call price delta each (their bars are the covariate series).
    - **Steady-state cost: ~3 calls/ticker/day** → ~80 tickers fit the daily budget.
 4. Run TimesFM inference per ticker (price = primary series; supplier bars +
    revenue growth = historical covariates). Write `factors` + push to

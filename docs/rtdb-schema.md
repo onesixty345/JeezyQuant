@@ -16,7 +16,9 @@ new tickers go through `POST /api/tickers` (server route, Admin SDK).
     meta/
       companyName: string
       exchange: string
-      status: "backfill_queued" | "backfilling" | "active" | "error"
+      status: "backfill_queued" | "backfilling" | "active" | "error" | "unsupported"
+        # "unsupported": symbol not covered by the FMP plan (e.g. MU on free) —
+        # quarantined automatically, never burns budget, never fails the run.
       addedAt: number            # ServerValue.TIMESTAMP (ms epoch)
       lastUpdated: number        # last successful daily delta write
       dataAsOf: string           # "YYYY-MM-DD" of newest price point
@@ -24,18 +26,22 @@ new tickers go through `POST /api/tickers` (server route, Admin SDK).
     priceHistory/{YYYY-MM-DD}/
       close: number
       volume: number
-    revenueQuarterly/{YYYY-QN}/  # e.g. "2026-Q3"
-      revenue: number
+    revenueQuarterly/{YYYY-QN}/  # e.g. "2026-Q3"; free tier caps at 5 quarters
+      revenue: number            # (~15 months — exactly one YoY comparison)
       reportedDate: string       # "YYYY-MM-DD"
     suppliers/{SUP_SYMBOL}/
       meta/ { name: string }
       priceHistory/{YYYY-MM-DD}/ { close: number }
+      revenueQuarterly/{YYYY-QN}/ { revenue, reportedDate }  # for supplier YoY
     factors/                     # latest raw ML outputs (overwritten each run)
       computedAt: number
       modelCheckpoint: string    # e.g. "google/timesfm-3.0-pytorch@sha256:…"
       horizonDays: number
       volatilityCluster: number  # 0–1, 63-day realized-vol percentile
       divergenceSpread: number   # stock 90d return − supplier revenue YoY
+                                 # (falls back to own revenue YoY when no
+                                 # supplier fundamentals exist)
+      forwardVolRatio: number    # TimesFM 30d dispersion / trailing dispersion
       compositeScore: number     # z(div) + z(vol), documented, not tuned
     factorHistory/{pushId}/
       { computedAt, modelCheckpoint, volatilityCluster, divergenceSpread, compositeScore }

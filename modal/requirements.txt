@@ -1,9 +1,7 @@
 # Modal backend — Python dependencies
 modal>=0.70
 torch
-transformers>=4.40
-accelerate
-huggingface_hub
+timesfm[torch]
 firebase-admin
 requests
 numpy
