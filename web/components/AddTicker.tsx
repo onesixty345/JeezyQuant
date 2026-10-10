@@ -30,7 +30,7 @@ export default function AddTicker({ onAdded }: { onAdded: () => void }) {
       // Read as text first: if the server returns HTML (proxy/gateway error),
       // res.json() throws a cryptic SyntaxError on WebKit. Surface the real status.
       const text = await res.text();
-      let data: { error?: string; reason?: string; status?: string; bars?: number; calls?: number; note?: string };
+      let data: { error?: string; reason?: string; status?: string; bars?: number; calls?: number; note?: string; compositeScore?: number; divergenceSpread?: number; volatilityCluster?: number; universeSize?: number };
       try {
         data = JSON.parse(text);
       } catch {
@@ -39,7 +39,11 @@ export default function AddTicker({ onAdded }: { onAdded: () => void }) {
       if (!res.ok) throw new Error(data.error ?? data.reason ?? "Request failed");
       setMsg(
         data.status === "active"
-          ? `${clean} backfilled — ${data.bars ?? "?"} bars, ${data.calls ?? "?"} API calls.`
+          ? typeof data.compositeScore === "number"
+            ? `${clean} scored — composite ${data.compositeScore.toFixed(3)} ` +
+              `(div ${Number(data.divergenceSpread).toFixed(3)}, vol ${Number(data.volatilityCluster).toFixed(3)}), ` +
+              `universe of ${data.universeSize}.`
+            : `${clean} backfilled — ${data.bars ?? "?"} bars, ${data.calls ?? "?"} API calls.`
           : `${clean}: ${data.status}${data.note ? ` — ${data.note}` : ""}`
       );
       setSymbol("");

@@ -36,6 +36,15 @@ import modal
 from fastapi import Request
 from pydantic import BaseModel
 
+# Local helper modules (fmp_adapter.py, timesfm_forecast.py) are baked into the
+# image via add_local_dir — Modal does not auto-package sibling imports on
+# deploy. The code lands at /root/quant_code, so it must be on sys.path
+# before those imports run.
+import sys as _sys
+
+if "/root/quant_code" not in _sys.path:
+    _sys.path.insert(0, "/root/quant_code")
+
 from fmp_adapter import FMPAdapter, FMPQuotaExhausted, FMPSymbolNotEntitled, FMPError
 from timesfm_forecast import (
     forward_vol_ratio,
@@ -52,6 +61,22 @@ app = modal.App("quant-dashboard")
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install_from_requirements("requirements.txt")
+)
+
+import pathlib
+
+_LOCAL_DIR = pathlib.Path(__file__).resolve().parent
+
+app = modal.App("quant-dashboard")
+
+image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install_from_requirements("requirements.txt")
+    # Bake the helper modules (fmp_adapter.py, timesfm_forecast.py) into the
+    # image — Modal does not auto-package sibling imports on deploy.
+    # copy=True (not the default mount) so redeploys deterministically pick
+    # up code changes; otherwise warm containers can serve stale code.
+    .add_local_dir(str(_LOCAL_DIR), remote_path="/root/quant_code", copy=True)
 )
 
 secrets = [modal.Secret.from_name("quant-dashboard-secrets")]
@@ -286,6 +311,164 @@ async def backfill_ticker(payload: BackfillPayload, request: Request):
         log["status"] = "failed"
         log["errors"].append({"ticker": payload.symbol, "stage": "backfill",
                               "message": str(e)[:300]})
+        return {"status": "error", "reason": str(e)[:200]}
+    finally:
+        finished = now_ms()
+        log["finishedAt"] = finished
+        log["durationSec"] = (finished - started) / 1000
+        try:
+            root.child("system_logs").push(log)
+        except Exception:
+            pass
+
+
+# ----------------------------------------------------------------------------
+# Entry point 1b: score a single ticker on demand (no FMP calls)
+# ----------------------------------------------------------------------------
+# Called right after a backfill so a newly added ticker gets factors and
+# joins the leaderboard immediately, using its as-of cached data. The daily
+# cron still refreshes everything when new market data is available.
+# Recomputes z-scores across the full universe so existing tickers' composite
+# scores update too.
+
+
+class ScorePayload(BaseModel):
+    symbol: str
+    secret: str
+
+
+@app.function(image=image, secrets=secrets, timeout=900)
+@modal.fastapi_endpoint(method="POST")
+async def score_ticker(payload: ScorePayload, request: Request):
+    started = now_ms()
+    run_id = str(uuid.uuid4())
+    log = {
+        "runId": run_id,
+        "trigger": "score_on_add",
+        "startedAt": started,
+        "modelCheckpoint": TIMESFM_MODEL_ID,
+        "tickersProcessed": 0,
+        "tickersFailed": [],
+        "apiCallsUsed": 0,
+        "errors": [],
+    }
+    root = get_root()
+    try:
+        provided = request.headers.get("x-backfill-secret") or payload.secret
+        expected = os.environ.get("BACKFILL_SECRET", "")
+        if not expected or not hmac.compare_digest(provided, expected):
+            return {"status": "unauthorized"}
+
+        symbol = payload.symbol.strip().upper()
+        if not re.fullmatch(r"[A-Z.]{1,10}", symbol):
+            return {"status": "error", "reason": "invalid symbol"}
+
+        node = root.child(f"tickers/{symbol}").get() or {}
+        meta = node.get("meta", {})
+        if meta.get("status") != "active":
+            return {"status": "error",
+                    "reason": f"ticker not active (status={meta.get('status')})"}
+
+        # --- factor math on cached history (zero FMP calls) ---
+        hist = node.get("priceHistory", {})
+        dates = sorted(hist)
+        closes = [hist[d]["close"] for d in dates]
+        if len(closes) < 60:
+            return {"status": "error",
+                    "reason": "insufficient cached price history"}
+
+        rev_map = dict(node.get("revenueQuarterly", {}))
+        sup_nodes = node.get("suppliers", {})
+
+        vol = realized_vol_percentile(closes)
+        ret90 = trailing_return(closes, 90)
+
+        sup_yoys = []
+        sup_maps = {}
+        for sup in list(sup_nodes.keys())[:2]:
+            sq = _sorted_quarters(sup_nodes.get(sup, {}).get("revenueQuarterly", {}))
+            g = yoy_growth(sq)
+            if g is not None:
+                sup_yoys.append(g)
+            existing = sup_nodes.get(sup, {}).get("priceHistory", {})
+            sup_maps[sup] = {d: v["close"] if isinstance(v, dict) else v
+                             for d, v in existing.items()}
+        own_yoy = yoy_growth(_sorted_quarters(rev_map))
+        div_base = (sum(sup_yoys) / len(sup_yoys)) if sup_yoys else own_yoy
+        divergence = ret90 - (div_base if div_base is not None else 0.0)
+
+        try:
+            rev_yoy_map = {d: own_yoy for d in dates} if own_yoy is not None else {}
+            fwd = forward_vol_ratio(dates, closes, sup_maps, rev_yoy_map)
+        except TimesFMUnavailable as e:
+            fwd = None
+            log["errors"].append({"ticker": symbol, "stage": "timesfm",
+                                "message": str(e)[:200]})
+
+        root.update({
+            f"tickers/{symbol}/meta/lastUpdated": now_ms(),
+            f"tickers/{symbol}/meta/consecutiveFailures": 0,
+            f"tickers/{symbol}/factors": {
+                "computedAt": now_ms(),
+                "modelCheckpoint": TIMESFM_MODEL_ID,
+                "horizonDays": 30,
+                "volatilityCluster": vol,
+                "divergenceSpread": divergence,
+                "forwardVolRatio": fwd,
+            },
+        })
+        log["tickersProcessed"] += 1
+
+        # --- z-score composite across the full universe ---
+        tickers = root.child("tickers").get() or {}
+        scored = []
+        for s, d in tickers.items():
+            if not isinstance(d, dict):
+                continue
+            f = d.get("factors") or {}
+            if f.get("volatilityCluster") is None or f.get("divergenceSpread") is None:
+                continue
+            m = d.get("meta", {})
+            scored.append((s, m.get("companyName", s),
+                           f["divergenceSpread"], f["volatilityCluster"],
+                           f.get("forwardVolRatio"), m.get("dataAsOf")))
+        if scored:
+            zdiv = zscores([d for _, _, d, _, _, _ in scored])
+            zvol = zscores([v for _, _, _, v, _, _ in scored])
+            lb = {}
+            for (s, company, _d, vol_, fwd_, asof), zd, zv in zip(scored, zdiv, zvol):
+                comp = zd + zv
+                div = next(d for x, _, d, _, _, _ in scored if x == s)
+                lb[f"tickers/{s}/factors/compositeScore"] = comp
+                lb[f"tickers/{s}/factorHistory/{run_id}_{s}"] = {
+                    "computedAt": now_ms(),
+                    "modelCheckpoint": TIMESFM_MODEL_ID,
+                    "volatilityCluster": vol_,
+                    "divergenceSpread": div,
+                    "forwardVolRatio": fwd_,
+                    "compositeScore": comp,
+                }
+                lb[f"leaderboard/{s}"] = {
+                    "symbol": s,
+                    "companyName": company,
+                    "compositeScore": comp,
+                    "volatilityCluster": vol_,
+                    "divergenceSpread": div,
+                    "forwardVolRatio": fwd_,
+                    "dataAsOf": asof,
+                }
+            root.update(lb)
+            root.child("config/global/universeSize").set(len(scored))
+
+        log["status"] = "ok"
+        return {"status": "ok", "symbol": symbol,
+                "volatilityCluster": vol, "divergenceSpread": divergence,
+                "forwardVolRatio": fwd,
+                "universeSize": len(scored)}
+    except Exception as e:
+        log["status"] = "failed"
+        log["errors"].append({"ticker": payload.symbol, "stage": "score",
+                            "message": str(e)[:300]})
         return {"status": "error", "reason": str(e)[:200]}
     finally:
         finished = now_ms()
