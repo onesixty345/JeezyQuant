@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { getAuthClient } from "@/lib/firebase";
 
 export default function AddTicker({ onAdded }: { onAdded: () => void }) {
   const [symbol, setSymbol] = useState("");
@@ -17,14 +18,22 @@ export default function AddTicker({ onAdded }: { onAdded: () => void }) {
     setBusy(true);
     setMsg("");
     try {
+      const token = await getAuthClient().currentUser?.getIdToken();
       const res = await fetch("/api/tickers", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ symbol: clean }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Request failed");
-      setMsg(`${clean} queued — historical backfill started.`);
+      if (!res.ok) throw new Error(data.error ?? data.reason ?? "Request failed");
+      setMsg(
+        data.status === "active"
+          ? `${clean} backfilled — ${data.bars ?? "?"} bars, ${data.calls ?? "?"} API calls.`
+          : `${clean}: ${data.status}${data.note ? ` — ${data.note}` : ""}`
+      );
       setSymbol("");
       onAdded();
     } catch (err) {
