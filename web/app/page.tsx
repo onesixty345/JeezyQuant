@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { child, get, ref } from "firebase/database";
-import { rtdb } from "@/lib/firebase";
+import { getRtdb } from "@/lib/firebase";
 import { sortBearish, sortBullish, type LeaderboardRow } from "@/lib/scoring";
 import StaleBanner from "@/components/StaleBanner";
 import Leaderboard from "@/components/Leaderboard";
 import AddTicker from "@/components/AddTicker";
+import AuthGate from "@/components/AuthGate";
 
-export default function Dashboard() {
+function DashboardContent() {
   const [rows, setRows] = useState<LeaderboardRow[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -16,7 +17,7 @@ export default function Dashboard() {
     setLoading(true);
     try {
       // Reads ONLY the denormalized leaderboard node — never the 2-yr histories.
-      const snap = await get(child(ref(rtdb), "quant/leaderboard"));
+      const snap = await get(child(ref(getRtdb()), "quant/leaderboard"));
       const val = snap.val() ?? {};
       setRows(
         Object.entries(val).map(([symbol, r]) => ({
@@ -62,5 +63,13 @@ export default function Dashboard() {
         Execution stays manual.
       </footer>
     </main>
+  );
+}
+
+export default function Dashboard() {
+  return (
+    <AuthGate>
+      <DashboardContent />
+    </AuthGate>
   );
 }

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { child, get, ref } from "firebase/database";
-import { rtdb } from "@/lib/firebase";
+import { getRtdb } from "@/lib/firebase";
 
 const STALE_HOURS = 24;
 
@@ -13,7 +13,7 @@ export default function StaleBanner() {
   useEffect(() => {
     (async () => {
       try {
-        const snap = await get(child(ref(rtdb), "quant/config/global/lastSuccessfulRun"));
+        const snap = await get(child(ref(getRtdb()), "quant/config/global/lastSuccessfulRun"));
         const ms: number | null = snap.val();
         if (!ms) {
           setStale(true);
