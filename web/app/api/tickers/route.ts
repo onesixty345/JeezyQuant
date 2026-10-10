@@ -21,7 +21,7 @@ export async function POST(req: Request) {
     }
     let email: string | undefined;
     try {
-      const decoded = await (await adminAuth()).verifyIdToken(m[1]);
+      const decoded = await adminAuth().verifyIdToken(m[1]);
       email = decoded.email;
     } catch (e) {
       const code = e instanceof Error && "code" in e ? String((e as { code: unknown }).code) : "unknown";
@@ -47,7 +47,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const db = await adminDb();
+    const db = adminDb();
     const metaRef = db.ref(`quant/tickers/${clean}/meta`);
     const existingStatus = ((await metaRef.get()).val() as { status?: string } | null)
       ?.status;
