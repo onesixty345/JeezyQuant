@@ -1,0 +1,11 @@
+# dependencies
+web/node_modules/
+# next.js
+web/.next/
+web/out/
+# env (never commit real values)
+web/.env
+web/.env*.local
+# misc
+.DS_Store
+*.log
