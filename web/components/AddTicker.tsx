@@ -18,7 +18,7 @@ export default function AddTicker({ onAdded }: { onAdded: () => void }) {
     setBusy(true);
     setMsg("");
     try {
-      const token = await getAuthClient().currentUser?.getIdToken();
+      const token = await getAuthClient().currentUser?.getIdToken(true);
       const res = await fetch("/api/tickers", {
         method: "POST",
         headers: {

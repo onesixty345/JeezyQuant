@@ -23,9 +23,10 @@ export async function POST(req: Request) {
     try {
       const decoded = await (await adminAuth()).verifyIdToken(m[1]);
       email = decoded.email;
-    } catch {
+    } catch (e) {
+      const code = e instanceof Error && "code" in e ? String((e as { code: unknown }).code) : "unknown";
       return NextResponse.json(
-        { error: "Invalid session. Sign in again." },
+        { error: `Invalid session (${code}). Sign in again.` },
         { status: 401 }
       );
     }
