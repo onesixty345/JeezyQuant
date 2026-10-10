@@ -27,7 +27,15 @@ export default function AddTicker({ onAdded }: { onAdded: () => void }) {
         },
         body: JSON.stringify({ symbol: clean }),
       });
-      const data = await res.json();
+      // Read as text first: if the server returns HTML (proxy/gateway error),
+      // res.json() throws a cryptic SyntaxError on WebKit. Surface the real status.
+      const text = await res.text();
+      let data: { error?: string; reason?: string; status?: string; bars?: number; calls?: number; note?: string };
+      try {
+        data = JSON.parse(text);
+      } catch {
+        throw new Error(`Server returned HTTP ${res.status} (non-JSON response).`);
+      }
       if (!res.ok) throw new Error(data.error ?? data.reason ?? "Request failed");
       setMsg(
         data.status === "active"
