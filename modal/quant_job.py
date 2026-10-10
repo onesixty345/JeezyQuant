@@ -2,7 +2,7 @@
 Quant Dashboard — Modal backend (Phase 2, RTDB + FMP + TimesFM 3.0).
 
 Two entry points:
-  1. daily_quant_run  — cron Mon–Fri 21:30 UTC (after US market close), T4 GPU.
+  1. daily_quant_run  — cron Mon–Fri 21:30 UTC (after US market close), CPU.
   2. backfill_ticker  — secured web endpoint, called by the Next.js UI when a
                         user adds a ticker. One-time historical pull only.
 
@@ -304,7 +304,10 @@ async def backfill_ticker(payload: BackfillPayload, request: Request):
 
 @app.function(
     image=image,
-    gpu="T4",
+    # CPU (not GPU): Modal requires a payment method on file for any GPU.
+    # TimesFM 3.0 (200M params) runs in <60s/ticker on CPU — fine for a
+    # watchlist-sized universe inside the 3600s timeout. Revisit GPU past
+    # ~50 tickers.
     secrets=secrets,
     schedule=modal.Cron("30 21 * * 1-5"),  # 21:30 UTC, Mon–Fri
     timeout=3600,

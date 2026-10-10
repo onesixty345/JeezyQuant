@@ -1,1 +1,22 @@
-{"rules":{"quant":{"config":{".read":true,".write":false},"leaderboard":{".read":true,".write":false},"system_logs":{".read":false,".write":false},"tickers":{".read":true,".write":false}}}}
+{
+  "rules": {
+    "quant": {
+      "config": {
+        ".read": true,
+        ".write": false
+      },
+      "leaderboard": {
+        ".read": true,
+        ".write": false
+      },
+      "system_logs": {
+        ".read": false,
+        ".write": false
+      },
+      "tickers": {
+        ".read": false,
+        ".write": false
+      }
+    }
+  }
+}
