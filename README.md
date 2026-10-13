@@ -1,50 +1,84 @@
-# Quant Dashboard — serverless quantitative stock screening
+# JeezyQuant — a report card for stocks 📊
 
-Zero-cost stack: **Next.js (Vercel)** + **Firebase Realtime Database** (existing
-`jeezyplayground` project, namespaced under `/quant/`) + **Modal (T4 cron)** +
-**FMP/Alpaca free tier** + **TimesFM** via Hugging Face.
+**What is this?** A website that watches stocks and gives each one a score,
+like a report card. High scores mean the stock looks strong. Low scores mean
+it looks weak. That's it. No trading, no buying, no selling — just scores
+to help with research.
 
-> **Phase 1 status: scaffolding only.** No API calls, no deploys, no secrets —
-> the append-only cache logic in `docs/append-only-cache.md` needs approval first.
+**Live site:** https://jeezy-quant.vercel.app
 
-## Layout
+## What does it do?
 
-| Path | What |
-|---|---|
-| `docs/rtdb-schema.md` | Exact RTDB tree (date-keyed history, denormalized leaderboard node) |
-| `docs/rtdb-rules.json` | Security rules to paste into the Firebase console |
-| `docs/append-only-cache.md` | **Cache logic for approval** — backfill vs daily delta, 250/day budget |
-| `modal/quant_job.py` | Modal stub: cron entrypoint, secured backfill endpoint, audit logging |
-| `modal/requirements.txt` | Python deps (`firebase-admin`, `torch`, `transformers`, …) |
-| `web/` | Next.js dashboard: Top 10 Bullish/Bearish, add-ticker, STALE banner |
+Every weekday, a robot wakes up, looks at the stock market, does some math,
+and updates a leaderboard:
 
-## Design notes (RTDB edition)
+- 🐂 **Top 10 Bullish** — the stocks with the best scores
+- 🐻 **Top 10 Bearish** — the stocks with the worst scores
 
-- History is stored in **date-keyed children** (`priceHistory/{YYYY-MM-DD}`),
-  making appends idempotent — a retried day overwrites instead of duplicating.
-- The UI reads only the tiny denormalized `/quant/leaderboard` node the backend
-  refreshes each run; 2-year histories never cross the wire to the browser.
-- Security rules: public read on tickers/leaderboard/config, zero client writes,
-  `system_logs` fully locked. The Admin SDK bypasses rules for the backend.
+If the data is more than a day old, the site shows a **STALE** banner so you
+know the scores might be out of date.
 
-## What I verified in this environment (Phase 1)
+You can also type in any stock ticker (like `MU` or `NVDA`) and hit
+**Add Ticker** — the site fetches its history and scores it right away.
+You don't have to wait for the robot.
 
-- Node 24, npm 10, Python 3.12 — present.
-- Modal CLI **not** installed; no Modal token — needed in Phase 2.
-- GitHub App cannot create repos — Raim created `JeezyQuant`; code is pushed here.
+## How does it work? (the simple version)
 
-## Blockers that need Raim (Phase 2)
+Think of it like grading a student's report card. For each stock, the robot
+checks three subjects and combines them into one final grade:
 
-1. **Data provider** — choose **FMP vs Alpaca**; provide the API key via Secure Vault → I inject it into Modal Secrets (never in the repo).
-2. **TimesFM checkpoint** — verify `google/timesfm-3.0-pytorch` resolves on Hugging Face before first inference run.
-3. **Modal account** — `modal setup` needs an interactive token.
-4. **Vercel project** — create in the dashboard (API creation is blocked on this account), connect this repo, set env vars from `web/.env.example`.
-5. **Firebase IAM** — mint a dedicated service account with minimal RTDB access for the Modal backend.
-6. **RTDB rules** — paste `docs/rtdb-rules.json` into Console → Realtime Database → Rules.
+1. **Jumpiness** — Has the stock's price been calm or all over the place?
+   Stocks tend to go through jumpy periods and calm periods, like weather.
+2. **Story check** — Does the company's money story match its stock price?
+   If a company's sales are growing but its stock is falling (or the other
+   way around), something interesting is happening.
+3. **AI forecast** — A Google AI model called TimesFM looks at the price
+   history and guesses how bouncy the next 30 days might be.
 
-## Security rules (non-negotiable)
+Each stock gets a grade in each subject. Then all the grades are compared
+across every stock being tracked, and each stock gets one final **score**.
+The leaderboard is just the stocks sorted by that score.
 
-- No API keys, service-account JSON, or secrets in the repo — ever.
-- Provider key + Firebase credentials live in **Modal Secrets** (`quant-dashboard-secrets`).
-- Vercel gets only `NEXT_PUBLIC_*` client config + server env vars; nothing secret is bundled client-side.
-- Every backend run writes to `/quant/system_logs` (checkpoint, quota, duration, failures). Silent skips are not allowed.
+## Where does the data come from?
+
+- **Stock prices:** a free service called FMP (250 free lookups per day —
+  the robot is careful never to go over). If FMP doesn't cover a stock,
+  the robot automatically tries **yfinance** instead, which is also free.
+- **Company sales:** quarterly revenue numbers, so the robot can do the
+  "story check."
+- **Saved homework:** every price the robot ever downloads gets saved in
+  a database (Firebase). It never downloads the same day twice.
+
+## What does it cost to run?
+
+**$0.** The website runs on Vercel's free plan. The robot runs on Modal's
+free CPU plan. The data comes from free tiers. The database is an existing
+Firebase project. The whole thing is designed to never spend a cent.
+
+## For builders (the slightly less simple part)
+
+```
+web/     → the website (Next.js + Tailwind, deployed on Vercel)
+modal/   → the robot (Python on Modal)
+  quant_job.py        → daily cron + scoring math + leaderboard refresh
+  fmp_adapter.py      → talks to FMP (free tier, 250 calls/day budget)
+  yfinance_adapter.py → backup data source when FMP doesn't cover a symbol
+  hybrid_adapter.py   → tries FMP first, falls back to yfinance automatically
+  timesfm_forecast.py → Google TimesFM volatility forecast (CPU)
+docs/    → database layout, security rules, cache design
+```
+
+- Robot schedule: Monday–Friday, 21:30 UTC, on Modal (`quant-dashboard` app).
+- Secrets (API keys, Firebase credentials) live in Modal Secrets and Vercel
+  env vars — never in this repo, ever.
+- Every robot run writes an audit log, so you can always see what it did.
+
+## Important honesty notes
+
+- This is a **research tool**, not financial advice. Scores are math, not
+  recommendations.
+- With only a couple of stocks tracked, the scores mostly just rank them
+  against each other. The more stocks on the leaderboard, the more the
+  scores mean.
+- Past price patterns don't predict the future. The AI forecast is a guess
+  with math behind it — still a guess.
