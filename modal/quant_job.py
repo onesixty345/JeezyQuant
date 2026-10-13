@@ -46,6 +46,7 @@ if "/root/quant_code" not in _sys.path:
     _sys.path.insert(0, "/root/quant_code")
 
 from fmp_adapter import FMPAdapter, FMPQuotaExhausted, FMPSymbolNotEntitled, FMPError
+from hybrid_adapter import HybridDataAdapter
 from timesfm_forecast import (
     forward_vol_ratio,
     TimesFMUnavailable,
@@ -234,7 +235,7 @@ async def backfill_ticker(payload: BackfillPayload, request: Request):
             return {"status": "deferred",
                     "reason": "daily budget too low, retry tomorrow"}
 
-        fmp = FMPAdapter()
+        fmp = HybridDataAdapter()
         to_date = utc_today()
         from_date = (datetime.now(timezone.utc) - timedelta(days=730)).strftime("%Y-%m-%d")
 
@@ -261,6 +262,8 @@ async def backfill_ticker(payload: BackfillPayload, request: Request):
                 "companyName": profile["companyName"],
                 "exchange": profile["exchange"],
                 "status": "active",
+                "dataSource": ("yfinance" if symbol in fmp.fallback_symbols
+                               else "fmp"),
                 "addedAt": started,
                 "lastUpdated": started,
                 "dataAsOf": bars[-1]["date"],
@@ -509,7 +512,7 @@ def daily_quant_run():
         "apiCallsUsed": 0,
         "errors": [],
     }
-    fmp = FMPAdapter()
+    fmp = HybridDataAdapter()
     status = "ok"
     budget_hit = False
 

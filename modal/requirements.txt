@@ -6,3 +6,6 @@ firebase-admin
 requests
 numpy
 pandas
+fastapi
+pydantic
+yfinance
